@@ -1,0 +1,336 @@
+Description:  This template deploys a VPC, with a pair of public and private subnets spread
+  across two Availability Zones. It deploys an internet gateway, with a default
+  route on the public subnets. It deploys a pair of NAT gateways (one in each AZ),
+  and default routes for them in the private subnets. Creates RDS subnet, db security group and RDS Mysql instance.
+  Create 3 bucket for Code, Source and Destination files in the account
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.192.0.0/16
+
+  PublicSubnetCIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.10.0/24
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.20.0/24
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.21.0/24
+    
+  RDSDBName:
+    Description: Please enter the RDS MySQL DB name
+    Type: String
+    Default: mydb
+  
+  RDSMasterUsername:
+    Description: Please enter the RDS MySQL master user name
+    Type: String
+    Default: mydbadmin
+
+  RDSMasterUserPassword:
+    Description: Please enter the RDS MySQL master user password
+    Type: String
+    Default: Pa$$w0rd1!
+
+  CodeBucketName:
+    Description: Please enter a unique code bucket name eg. techlab-<account number>-code
+    Type: String
+    
+  SourceBucketName:
+    Description: Please enter a unique source bucket name eg. techlab-<account number>-input
+    Type: String
+    
+  DestinationBucketName:
+    Description: Please enter a unique destination bucket name eg. techlab-<account number>-output
+    Type: String
+
+
+Resources:
+  ## S3 bucket
+  CodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref CodeBucketName 
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref SourceBucketName    
+  DestinationBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DestinationBucketName   
+      
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ1)
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ1)
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ2)
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes (AZ1)
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes (AZ2)
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+      
+   # RDS security group inbound and outbound access
+  RDSSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupName: RDSSecurityGroup
+        VpcId: !Ref VPC
+        GroupDescription: Enable MySql access via user defined port
+        SecurityGroupIngress:
+          - CidrIp: !Ref PrivateSubnet1CIDR
+            FromPort: 3306
+            IpProtocol: tcp
+            ToPort: 3306
+        SecurityGroupIngress:
+          - CidrIp: !Ref PrivateSubnet2CIDR
+            FromPort: 3306
+            IpProtocol: tcp
+            ToPort: 3306
+
+    # RDS Subnet Group
+  
+  RDSDBSubnetGroup:
+      Type: "AWS::RDS::DBSubnetGroup"
+      Properties:
+        DBSubnetGroupDescription: "description"
+        DBSubnetGroupName: "RDS_DB_PrivSubnet"
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+
+    # KMS RDS encryption key
+  rdsKey:
+      Type: AWS::KMS::Key
+      Properties:
+        KeyPolicy:
+          Version: 2012-10-17
+          Id: key-rds
+          Statement:
+            - Sid: Enable IAM User Permissions
+              Effect: Allow
+              Principal:
+                AWS: !Join
+                  - ''
+                  - - 'arn:aws:iam::'
+                    - !Ref 'AWS::AccountId'
+                    - ':root'
+              Action: 'kms:*'
+              Resource: '*'
+  rdsAlias:
+      Type: AWS::KMS::Alias
+      Properties:
+        AliasName: alias/rds
+        TargetKeyId:
+          Ref: rdsKey
+          
+   # RDS MySQL database configuration
+  MySQLDatabase:
+      Type: 'AWS::RDS::DBInstance'
+      Properties:
+        Engine: MySQL
+        DBName: !Ref RDSDBName
+        StorageEncrypted: true
+        KmsKeyId: !Ref rdsKey
+        MasterUsername: !Ref RDSMasterUsername
+        MasterUserPassword: !Ref RDSMasterUserPassword
+        DBInstanceClass: db.t2.small
+        AllocatedStorage: 5
+# To add a specific storage type add "StorageType: gp2, io1, or standard" for io1 you must also declare "Iops: with an integer equal or greater then 1000"
+# gp2 is General Purpose (SSD), io1 is provisioned IOPS, and standard is magnetic
+        DBSubnetGroupName: !Ref RDSDBSubnetGroup
+        VPCSecurityGroups:
+          - Ref: RDSSecurityGroup
+Outputs:
+
+  CodeBucketName:
+    Value: !Ref CodeBucketName
+    Description: S3 Bucket for code storage
+    
+  SourceBucketName:
+    Value: !Ref SourceBucketName
+    Description: S3 Bucket for source file storage
+    
+  DestinationBucketName:
+    Value: !Ref DestinationBucketName
+    Description: S3 destination Bucket for destination file storage
+    
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+
+  PublicSubnets:
+    Description: A list of the public subnets
+    Value: !Ref PublicSubnet
+
+  PrivateSubnets:
+    Description: A list of the private subnets
+    Value: !Join [ ",", [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ]]
+
+  PublicSubnet:
+    Description: A reference to the public subnet in the 1st Availability Zone
+    Value: !Ref PublicSubnet
+
+
+  PrivateSubnet1:
+    Description: A reference to the private subnet in the 1st Availability Zone
+    Value: !Ref PrivateSubnet1
+
+  PrivateSubnet2:
+    Description: A reference to the private subnet in the 2nd Availability Zone
+    Value: !Ref PrivateSubnet2
+
+
+  RDSDBSubnetGroup:
+        Description: 'RDS Private Subnet Group'
+        Value: !Ref RDSDBSubnetGroup
+          
+  RDSSecurityGroup:
+      Description: 'RDS Security Group'
+      Value: !Ref RDSSecurityGroup
+  rdsAlias:
+      Description: 'RDS KMS Encryption Key Alias'
+      Value: !Ref rdsAlias
+      
+  MasterJDBCConnectionString:
+    Description: JDBC connection string for the master database
+    Value: !Join ['', ['jdbc:mysql://', !GetAtt [MySQLDatabase, Endpoint.Address], ':',
+        !GetAtt [MySQLDatabase, Endpoint.Port], /, !Ref 'RDSDBName']]
+    
+  
